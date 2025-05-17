@@ -70,7 +70,6 @@ def create_penn_action_masked_dataloader(
         num_workers     = num_workers,
         pin_memory      = pin_memory,
         drop_last       = drop_last,
-        persistent_workers = num_workers > 0,
     )
 
     # Optionally wrap into an infinite iterator (used during training)

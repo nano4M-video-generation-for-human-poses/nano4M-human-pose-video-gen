@@ -123,7 +123,7 @@ class PennActionMultimodalDataset(Dataset):
             ext = self.mod_ext[m]
             path = self.root_dir / self.split / m / f"{stem}{ext}"
 
-            if "tok" in m:
+            if "tok_rgb" == m:
                 arr = np.load(path, mmap_mode="r")          # shapes:
                                                             # (H,W)  = 40×40   or
                                                             # (K,H,W)= K×40×40
@@ -140,18 +140,27 @@ class PennActionMultimodalDataset(Dataset):
                 sample[m] = torch.as_tensor(tok, dtype=torch.long)
 
             elif m == "coords":
-                arr = np.load(path, mmap_mode="r")      # (K, 3, 13) or (3, 13)
+                # ── load (K,3,13) or (3,13) ─────────────────────────────────────────
+                arr = np.load(path, mmap_mode="r")
                 kk  = k if arr.ndim == 3 else 0
-                data = arr[kk] if arr.ndim == 3 else arr   # (3, 13)
+                data = arr[kk] if arr.ndim == 3 else arr       # shape (3, 13)
             
-                # ----- make it 1-D --------------------------------------------------
-                data = data.flatten()                     # (39,)
+                # -------------------------------------------------------------------
+                # split into   x (13) | y (13) | vis (13)   then tokenise each part
+                # -------------------------------------------------------------------
             
-                # OPTIONAL: bin to ints so masking can still use 'unknown' tokens
-                # e.g. put every coord in 0..8191
-                data = np.clip(((data + 1.0) * 4095.5).astype(np.int64), 0, 8191)
+                # 1) coordinates 
+                xy = data[:2].reshape(-1)          # 26 numbers in [0, 1]
+                # map 0 → 1 , 1 → 8190   (leave 0 for PAD, 8191 for "vis = 1")
+                xy_tok = np.clip((xy * 8189 + 1).astype(np.int64), 1, 8190)
             
-                sample[m] = torch.as_tensor(data, dtype=torch.long)
+                # 2) visibility flags 
+                vis = data[2].reshape(-1)          # 13 values ∈ {0., 1.}
+                vis_tok = np.where(vis > 0.5, 8191, 0).astype(np.int64)
+            
+                # 3) concatenate & ship off  ───────────────────────────────────────
+                tokens = np.concatenate([xy_tok, vis_tok])    # (39,)
+                sample[m] = torch.as_tensor(tokens, dtype=torch.long)
             elif m in ("captions"):
                 caps_json = json.load(open(path, "r"))
             
