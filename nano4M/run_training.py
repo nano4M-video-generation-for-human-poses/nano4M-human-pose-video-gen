@@ -171,9 +171,7 @@ def main(args):
 
     # Train and val loader setup
     data_loader_train = instantiate(args.train_loader_config)
-    data_loader_eval = instantiate(args.eval_loader_config)   
-    
-    # Model setup
+    data_loader_eval = instantiate(args.eval_loader_config) 
     model = instantiate(args.model_config).to(device)
     model_without_ddp = model
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -181,6 +179,34 @@ def main(args):
     model_without_ddp = model.module
     print(f"Model = %s" % str(model_without_ddp))
     print(f"Number of params: {n_parameters / 1e6} M")
+    # ------------------------------------------------------------
+    # Quick sanity–checks to catch NaNs / bad tokens early
+    # ------------------------------------------------------------
+    from contextlib import suppress
+    
+    modalities   = args.model_config["modalities"]          # ["tok_rgb","captions","coords"]
+    vocab_sizes  = args.model_config["vocab_sizes"]         # [65536, 50265, 8192]
+    
+    print("Running one debug batch …")
+    batch = next(iter(data_loader_train))
+    batch = {k: v.to(device, non_blocking=True) if torch.is_tensor(v) else v
+             for k, v in batch.items()}
+    
+    # 1) make sure every sample has at least one *target* token
+    assert (batch["dec_pad_mask"].sum(-1) > 0).all(), "all-pad target sequence found"
+    
+    # 2) check token-ids stay inside their vocab
+    for m, V in zip(modalities, vocab_sizes):
+        sel = batch["dec_modalities"] == modalities.index(m)
+        bad = (batch["dec_tokens"][sel] >= V).nonzero(as_tuple=True)[0]
+        assert bad.numel() == 0, f"{m}: {bad.numel()} ids ≥ vocab_size"
+    
+    # 3) one forward / backward with anomaly detection
+    torch.autograd.set_detect_anomaly(True)
+    model.train()                                 
+    loss, _ = model(batch)
+    loss.backward()
+    # Model setup
 
     # Training phases
     args.total_batch_size = args.batch_size * args.world_size
